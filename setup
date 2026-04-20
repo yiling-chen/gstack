@@ -43,7 +43,7 @@ TEAM_MODE=0
 NO_TEAM_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host) [ -z "$2" ] && echo "Missing value for --host (expected claude, codex, kiro, factory, opencode, openclaw, hermes, gbrain, or auto)" >&2 && exit 1; HOST="$2"; shift 2 ;;
+    --host) [ -z "$2" ] && echo "Missing value for --host (expected claude, codex, kiro, factory, opencode, openclaw, hermes, gbrain, copilot, or auto)" >&2 && exit 1; HOST="$2"; shift 2 ;;
     --host=*) HOST="${1#--host=}"; shift ;;
     --local) LOCAL_INSTALL=1; shift ;;
     --prefix)    SKILL_PREFIX=1; SKILL_PREFIX_FLAG=1; shift ;;
@@ -91,7 +91,25 @@ case "$HOST" in
     echo "GBrain setup and brain skills ship from the GBrain repo."
     echo ""
     exit 0 ;;
-  *) echo "Unknown --host value: $HOST (expected claude, codex, kiro, factory, opencode, openclaw, hermes, gbrain, or auto)" >&2; exit 1 ;;
+  copilot)
+    echo ""
+    echo "To install gstack skills for GitHub Copilot CLI:"
+    echo ""
+    echo "  1. Clone gstack to a neutral location:"
+    echo "       git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.gstack"
+    echo "       cd ~/.gstack && bun install && bun run build"
+    echo ""
+    echo "  2. Generate Copilot CLI skill docs:"
+    echo "       bun run gen:skill-docs --host copilot"
+    echo ""
+    echo "  3. Copy generated skills to your personal skills directory:"
+    echo "       cp -r .copilot/skills/gstack* ~/.copilot/skills/"
+    echo ""
+    echo "  Skills will be auto-discovered from ~/.copilot/skills/ on next launch."
+    echo "  For project-level skills, copy to .github/skills/ in your repository."
+    echo ""
+    exit 0 ;;
+  *) echo "Unknown --host value: $HOST (expected claude, codex, kiro, factory, opencode, openclaw, hermes, gbrain, copilot, or auto)" >&2; exit 1 ;;
 esac
 
 # ─── Resolve skill prefix preference ─────────────────────────
