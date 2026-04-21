@@ -27,6 +27,10 @@ const copilot: HostConfig = {
 
   pathRewrites: [
     { from: '~/.claude/skills/gstack', to: '~/.copilot/skills/gstack' },
+    // Explicit $HOME form must come before the substring .claude/skills/gstack rule,
+    // otherwise $HOME/.claude/skills/gstack gets rewritten to $HOME/.github/skills/gstack.
+    { from: '$HOME/.claude/skills/gstack', to: '$HOME/.copilot/skills/gstack' },
+    { from: '.claude/skills/review', to: '.github/skills/gstack/review' },
     { from: '.claude/skills/gstack', to: '.github/skills/gstack' },
     { from: '.claude/skills', to: '.github/skills' },
   ],
@@ -42,9 +46,9 @@ const copilot: HostConfig = {
   ],
 
   runtimeRoot: {
-    globalSymlinks: ['bin', 'browse/dist', 'browse/bin', 'gstack-upgrade', 'ETHOS.md'],
+    globalSymlinks: ['bin', 'browse/dist', 'browse/bin', 'design/dist', 'gstack-upgrade', 'ETHOS.md', 'review/specialists', 'qa/templates', 'qa/references', 'plan-devex-review/dx-hall-of-fame.md'],
     globalFiles: {
-      'review': ['checklist.md', 'TODOS-format.md'],
+      'review': ['checklist.md', 'design-checklist.md', 'greptile-triage.md', 'TODOS-format.md'],
     },
   },
 
