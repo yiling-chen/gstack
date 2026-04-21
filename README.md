@@ -126,6 +126,27 @@ Or target a specific agent with `./setup --host <name>`:
 **Want to add support for another agent?** See [docs/ADDING_A_HOST.md](docs/ADDING_A_HOST.md).
 It's one TypeScript config file, zero code changes.
 
+### Receiving upstream updates
+
+The upgrade skill (`/gstack-upgrade`) pulls from your git remote `origin/main`. If
+you cloned directly from this repo, upgrades just work. If you're working from a
+**fork** (e.g., to add agent-specific patches), set up an `upstream` remote so you
+can pull improvements on your own schedule:
+
+```bash
+cd ~/gstack
+git remote add upstream https://github.com/garrytan/gstack.git
+
+# When you want to pull upstream improvements:
+git fetch upstream
+git merge upstream/main   # resolve any conflicts with your local patches
+./setup --host <name>     # regenerate skill docs with fresh templates
+```
+
+This lets you stay current with upstream while keeping your own changes stable.
+`/gstack-upgrade` continues to work — it tracks your fork's `origin/main`, which
+is the version you've validated.
+
 ## See it work
 
 ```
