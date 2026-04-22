@@ -752,7 +752,7 @@ create_copilot_runtime_root() {
     rm -rf "$copilot_gstack"
   fi
 
-  mkdir -p "$copilot_gstack" "$copilot_gstack/browse" "$copilot_gstack/design" "$copilot_gstack/gstack-upgrade" "$copilot_gstack/review" "$copilot_gstack/qa" "$copilot_gstack/plan-devex-review"
+  mkdir -p "$copilot_gstack" "$copilot_gstack/browse" "$copilot_gstack/design" "$copilot_gstack/gstack-upgrade" "$copilot_gstack/review" "$copilot_gstack/qa" "$copilot_gstack/plan-devex-review" "$copilot_gstack/plan-ceo-review" "$copilot_gstack/plan-eng-review" "$copilot_gstack/plan-design-review"
 
   if [ -f "$copilot_dir/gstack/SKILL.md" ]; then
     ln -snf "$copilot_dir/gstack/SKILL.md" "$copilot_gstack/SKILL.md"
@@ -791,6 +791,15 @@ create_copilot_runtime_root() {
   fi
   if [ -f "$gstack_dir/ETHOS.md" ]; then
     ln -snf "$gstack_dir/ETHOS.md" "$copilot_gstack/ETHOS.md"
+  fi
+  if [ -f "$copilot_dir/gstack-plan-ceo-review/SKILL.md" ]; then
+    ln -snf "$copilot_dir/gstack-plan-ceo-review/SKILL.md" "$copilot_gstack/plan-ceo-review/SKILL.md"
+  fi
+  if [ -f "$copilot_dir/gstack-plan-eng-review/SKILL.md" ]; then
+    ln -snf "$copilot_dir/gstack-plan-eng-review/SKILL.md" "$copilot_gstack/plan-eng-review/SKILL.md"
+  fi
+  if [ -f "$copilot_dir/gstack-plan-design-review/SKILL.md" ]; then
+    ln -snf "$copilot_dir/gstack-plan-design-review/SKILL.md" "$copilot_gstack/plan-design-review/SKILL.md"
   fi
 }
 
