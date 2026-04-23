@@ -789,6 +789,9 @@ create_copilot_runtime_root() {
   if [ -f "$gstack_dir/plan-devex-review/dx-hall-of-fame.md" ]; then
     ln -snf "$gstack_dir/plan-devex-review/dx-hall-of-fame.md" "$copilot_gstack/plan-devex-review/dx-hall-of-fame.md"
   fi
+  if [ -f "$copilot_dir/gstack-plan-devex-review/SKILL.md" ]; then
+    ln -snf "$copilot_dir/gstack-plan-devex-review/SKILL.md" "$copilot_gstack/plan-devex-review/SKILL.md"
+  fi
   if [ -f "$gstack_dir/ETHOS.md" ]; then
     ln -snf "$gstack_dir/ETHOS.md" "$copilot_gstack/ETHOS.md"
   fi

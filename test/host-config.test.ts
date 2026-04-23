@@ -16,6 +16,7 @@ import {
   getExternalHosts,
   claude,
   codex,
+  copilot,
   factory,
   kiro,
   opencode,
@@ -534,5 +535,12 @@ describe('host config correctness', () => {
       expect(config.runtimeRoot.globalSymlinks).toContain('bin');
       expect(config.runtimeRoot.globalSymlinks).toContain('ETHOS.md');
     }
+  });
+
+  test('copilot runtime root includes nested autoplan review skills', () => {
+    expect(copilot.runtimeRoot.globalSymlinks).toContain('plan-ceo-review/SKILL.md');
+    expect(copilot.runtimeRoot.globalSymlinks).toContain('plan-eng-review/SKILL.md');
+    expect(copilot.runtimeRoot.globalSymlinks).toContain('plan-design-review/SKILL.md');
+    expect(copilot.runtimeRoot.globalSymlinks).toContain('plan-devex-review/SKILL.md');
   });
 });
