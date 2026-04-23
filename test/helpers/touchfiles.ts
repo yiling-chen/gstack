@@ -82,6 +82,13 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'plan-eng-review-artifact':  ['plan-eng-review/**'],
   'plan-review-report':        ['plan-eng-review/**', 'scripts/gen-skill-docs.ts'],
 
+  // AskUserQuestion format regression (RECOMMENDATION + Completeness: N/10)
+  // Fires when either template OR the two preamble resolvers change.
+  'plan-ceo-review-format-mode':      ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts'],
+  'plan-ceo-review-format-approach':  ['plan-ceo-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts'],
+  'plan-eng-review-format-coverage':  ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts'],
+  'plan-eng-review-format-kind':      ['plan-eng-review/**', 'scripts/resolvers/preamble/generate-ask-user-format.ts', 'scripts/resolvers/preamble/generate-completeness-section.ts', 'scripts/resolvers/preamble.ts'],
+
   // /plan-tune (v1 observational)
   'plan-tune-inspect':         ['plan-tune/**', 'scripts/question-registry.ts', 'scripts/psychographic-signals.ts', 'scripts/one-way-doors.ts', 'bin/gstack-question-log', 'bin/gstack-question-preference', 'bin/gstack-developer-profile'],
 
@@ -206,6 +213,15 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'journey-retro':          ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
   'journey-design-system':  ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
   'journey-visual-qa':      ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
+
+  // Opus 4.7 behavior evals — keys match testName: values in the test file.
+  // Routing sub-tests use template literal `routing-${c.name}` testNames,
+  // which the touchfile completeness scanner skips; they inherit selection
+  // from the file-level touchfile entry via GLOBAL_TOUCHFILES.
+  'fanout-arm-overlay-on':
+    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts'],
+  'fanout-arm-overlay-off':
+    ['model-overlays/claude.md', 'model-overlays/opus-4-7.md', 'scripts/models.ts', 'scripts/resolvers/model-overlay.ts'],
 };
 
 /**
@@ -265,6 +281,12 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'plan-eng-review-artifact': 'periodic',
   'plan-eng-coverage-audit': 'gate',
   'plan-review-report': 'gate',
+
+  // AskUserQuestion format regression — periodic (Opus 4.7 non-deterministic benchmark)
+  'plan-ceo-review-format-mode': 'periodic',
+  'plan-ceo-review-format-approach': 'periodic',
+  'plan-eng-review-format-coverage': 'periodic',
+  'plan-eng-review-format-kind': 'periodic',
 
   // /plan-tune — gate (core v1 DX promise: plain-English intent routing)
   'plan-tune-inspect': 'gate',
@@ -372,6 +394,10 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'journey-retro': 'periodic',
   'journey-design-system': 'periodic',
   'journey-visual-qa': 'periodic',
+
+  // Opus 4.7 overlay evals — periodic (non-deterministic LLM behavior + Opus cost)
+  'fanout-arm-overlay-on': 'periodic',
+  'fanout-arm-overlay-off': 'periodic',
 };
 
 /**

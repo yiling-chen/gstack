@@ -244,8 +244,9 @@ describe('gen-skill-docs', () => {
   test('tier 2+ skills contain ELI16 simplification rules (AskUserQuestion format)', () => {
     // Root SKILL.md is tier 1 (no AskUserQuestion format). Check a tier 2+ skill instead.
     const content = fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md'), 'utf-8');
-    expect(content).toContain('No raw function names');
+    expect(content).toContain('Simplify (ELI10');
     expect(content).toContain('plain English');
+    expect(content).toContain('not function names');
   });
 
   test('tier 1 skills do NOT contain AskUserQuestion format', () => {
@@ -1361,10 +1362,21 @@ describe('preamble routing injection', () => {
   });
 
   test('routing section content includes key routing rules', () => {
-    expect(shipContent).toContain('invoke office-hours');
-    expect(shipContent).toContain('invoke investigate');
-    expect(shipContent).toContain('invoke ship');
-    expect(shipContent).toContain('invoke qa');
+    expect(shipContent).toContain('invoke /office-hours');
+    expect(shipContent).toContain('invoke /investigate');
+    expect(shipContent).toContain('invoke /ship');
+    expect(shipContent).toContain('invoke /qa');
+  });
+
+  test('routing section uses renamed checkpoint skills (not stale /checkpoint)', () => {
+    expect(shipContent).toContain('invoke /context-save');
+    expect(shipContent).toContain('invoke /context-restore');
+    expect(shipContent).not.toContain('invoke checkpoint');
+  });
+
+  test('routing section uses soft "when in doubt" policy, not hard "ALWAYS invoke"', () => {
+    expect(shipContent).toContain('When in doubt, invoke the skill');
+    expect(shipContent).not.toContain('Do NOT answer directly');
   });
 });
 
